@@ -199,7 +199,9 @@
         </div>
     </div>
 
+    <!-- CDN requis -->
     <script src="https://unpkg.com/dexie@3.2.3/dist/dexie.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="script.js"></script>
     
     <script>
@@ -218,17 +220,26 @@
         function clearAllFavorites() {
             if (confirm('⚠️ Supprimer tous les favoris ? Cette action est irréversible.')) {
                 showToast('🗑 Suppression de tous les favoris...');
-                // Fonction à implémenter
             }
         }
         
         function addCurrentToFavorites() {
-            showToast('⭐ Ajout aux favoris');
+            const title = document.getElementById('currentTitle').textContent;
+            const artist = document.getElementById('currentArtist').textContent;
+            if (title !== 'Aucune chanson') {
+                showToast(`⭐ ${title} ajouté aux favoris`);
+            } else {
+                showToast('🎵 Aucune chanson en cours');
+            }
         }
         
         function togglePlayPause() {
             const audio = document.getElementById('audioPlayer');
             const btn = document.getElementById('playPauseBtn');
+            if (!audio.src) {
+                showToast('🎵 Sélectionnez une chanson d\'abord');
+                return;
+            }
             if (audio.paused) {
                 audio.play();
                 btn.innerHTML = '<i class="fas fa-pause"></i>';
@@ -247,21 +258,33 @@
         }
         
         // Mettre à jour le temps
-        const audio = document.getElementById('audioPlayer');
-        if (audio) {
-            audio.addEventListener('timeupdate', () => {
-                const current = audio.currentTime;
-                const duration = audio.duration;
-                const percent = (current / duration) * 100;
-                document.getElementById('progressFill').style.width = percent + '%';
-                document.getElementById('currentTime').textContent = formatTime(current);
-                if (duration) {
+        const audioPlayer = document.getElementById('audioPlayer');
+        if (audioPlayer) {
+            audioPlayer.addEventListener('timeupdate', () => {
+                const current = audioPlayer.currentTime;
+                const duration = audioPlayer.duration;
+                if (duration && !isNaN(duration)) {
+                    const percent = (current / duration) * 100;
+                    const progressFill = document.getElementById('progressFill');
+                    if (progressFill) progressFill.style.width = percent + '%';
+                    document.getElementById('currentTime').textContent = formatTime(current);
                     document.getElementById('totalTime').textContent = formatTime(duration);
                 }
+            });
+            
+            audioPlayer.addEventListener('play', () => {
+                const btn = document.getElementById('playPauseBtn');
+                if (btn) btn.innerHTML = '<i class="fas fa-pause"></i>';
+            });
+            
+            audioPlayer.addEventListener('pause', () => {
+                const btn = document.getElementById('playPauseBtn');
+                if (btn) btn.innerHTML = '<i class="fas fa-play"></i>';
             });
         }
         
         function formatTime(seconds) {
+            if (isNaN(seconds)) return '0:00';
             const mins = Math.floor(seconds / 60);
             const secs = Math.floor(seconds % 60);
             return mins + ':' + (secs < 10 ? '0' + secs : secs);
@@ -285,6 +308,53 @@
                     searchSection.classList.add('scrolled');
                 } else {
                     searchSection.classList.remove('scrolled');
+                }
+            });
+        }
+        
+        // Gestion du clear button
+        const searchInput = document.getElementById('searchInput');
+        const clearBtn = document.querySelector('.search-clear');
+        if (searchInput && clearBtn) {
+            searchInput.addEventListener('input', () => {
+                if (searchInput.value.length > 0) {
+                    clearBtn.style.display = 'flex';
+                } else {
+                    clearBtn.style.display = 'none';
+                }
+            });
+        }
+        
+        // Volume control
+        const volumeBar = document.querySelector('.volume-bar');
+        const volumeFill = document.getElementById('volumeFill');
+        const volumeIcon = document.querySelector('.volume-icon');
+        
+        if (volumeBar && audioPlayer) {
+            volumeBar.addEventListener('click', (e) => {
+                const rect = volumeBar.getBoundingClientRect();
+                const percent = (e.clientX - rect.left) / rect.width;
+                audioPlayer.volume = Math.min(1, Math.max(0, percent));
+                if (volumeFill) volumeFill.style.width = (percent * 100) + '%';
+                
+                if (audioPlayer.volume === 0) {
+                    volumeIcon.className = 'fas fa-volume-mute';
+                } else if (audioPlayer.volume < 0.5) {
+                    volumeIcon.className = 'fas fa-volume-down';
+                } else {
+                    volumeIcon.className = 'fas fa-volume-up';
+                }
+            });
+        }
+        
+        // Progression bar click
+        const progressBar = document.querySelector('.progress-bar');
+        if (progressBar && audioPlayer) {
+            progressBar.addEventListener('click', (e) => {
+                const rect = progressBar.getBoundingClientRect();
+                const percent = (e.clientX - rect.left) / rect.width;
+                if (audioPlayer.duration) {
+                    audioPlayer.currentTime = percent * audioPlayer.duration;
                 }
             });
         }

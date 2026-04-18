@@ -1,8 +1,12 @@
-// ========== CONFIGURATION ==========
-const API_URL = ''; // Laisser vide car on est à la racine
-const DB = new Dexie('VickyfyCache');
+// ========== CONFIGURATION SUPABASE ==========
+const SUPABASE_URL = 'https://ocenlsrwqhroiwngxstb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_jS_lqFt7korNB75ymk6Qww__3bkImZq';
 
-// Mettre à jour la version de la base de données
+// Initialiser Supabase
+const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ========== BASE DE DONNÉES LOCALE (IndexedDB) ==========
+const DB = new Dexie('VickyfyCache');
 DB.version(3).stores({
     favorites: 'id, title, artist, filename, blob, lyrics, syncedLyrics',
     lyrics: 'id, lyrics, timestamp, synced'
@@ -11,6 +15,8 @@ DB.version(3).stores({
 let currentView = 'home';
 let favoritesSet = new Set();
 let currentSongId = null;
+let currentSongTitle = '';
+let currentSongArtist = '';
 let lyricsLines = [];
 let currentLineIndex = -1;
 let syncInterval = null;
@@ -19,7 +25,7 @@ let songDuration = 0;
 
 // ========== INITIALISATION ==========
 document.addEventListener('DOMContentLoaded', async () => {
-    console.log('🎵 Vickyfy chargé');
+    console.log('🎵 Vickyfy sur Supabase !');
     await loadFavorites();
     showHome();
     updateStorageInfo();
@@ -38,47 +44,41 @@ function initAudioEvents() {
     });
     audio.addEventListener('play', () => {
         startLyricsSync();
-        // Récupérer la durée de la chanson
         if (audio.duration) {
             songDuration = audio.duration;
         }
     });
     audio.addEventListener('loadedmetadata', () => {
         songDuration = audio.duration;
-        // Recalculer les timestamps avec la vraie durée
         recalculateTimestamps();
     });
 }
 
-// Recalculer les timestamps en fonction de la durée réelle
+// Recalculer les timestamps
 function recalculateTimestamps() {
     if (!lyricsLines.length || !songDuration) return;
     
-    const totalLines = lyricsLines.filter(line => !line.isBreak && line.text.trim()).length;
+    const totalLines = lyricsLines.filter(line => !line.isBreak && line.text && line.text.trim()).length;
     let lineIndex = 0;
     
     for (let i = 0; i < lyricsLines.length; i++) {
         const line = lyricsLines[i];
-        if (!line.isBreak && line.text.trim()) {
-            // Répartir les lignes uniformément sur la durée de la chanson
+        if (!line.isBreak && line.text && line.text.trim()) {
             const timestamp = (lineIndex / totalLines) * songDuration;
             line.timestamp = timestamp;
             lineIndex++;
         }
     }
-    console.log('📊 Timestamps recalculés avec durée:', songDuration, 'secondes');
+    console.log('📊 Timestamps recalculés');
 }
 
-// Synchronisation des paroles basée sur le temps
 function updateLyricsSync() {
     const audio = document.getElementById('audioPlayer');
     const currentTime = audio.currentTime;
     
     if (!lyricsLines.length) return;
     
-    // Trouver la ligne active basée sur les timestamps
     let activeIndex = -1;
-    
     for (let i = 0; i < lyricsLines.length; i++) {
         const line = lyricsLines[i];
         if (line.timestamp !== undefined && currentTime >= line.timestamp) {
@@ -88,7 +88,6 @@ function updateLyricsSync() {
         }
     }
     
-    // Mettre à jour l'affichage si la ligne a changé
     if (activeIndex !== currentLineIndex && activeIndex >= 0) {
         currentLineIndex = activeIndex;
         highlightCurrentLine(currentLineIndex);
@@ -102,7 +101,7 @@ function startLyricsSync() {
     if (syncInterval) clearInterval(syncInterval);
     syncInterval = setInterval(() => {
         updateLyricsSync();
-    }, 100); // Vérifier toutes les 100ms pour une meilleure précision
+    }, 100);
 }
 
 function stopLyricsSync() {
@@ -121,14 +120,12 @@ function highlightCurrentLine(index) {
             line.style.borderLeftColor = '#9b59b6';
             line.style.fontWeight = 'bold';
             line.style.color = '#fff';
-            line.style.transform = 'scale(1.02)';
         } else {
             line.classList.remove('active-line');
             line.style.background = '';
             line.style.borderLeftColor = 'transparent';
             line.style.fontWeight = 'normal';
             line.style.color = '#e0e0e0';
-            line.style.transform = 'scale(1)';
         }
     });
 }
@@ -136,22 +133,24 @@ function highlightCurrentLine(index) {
 function autoScrollToLine(index) {
     const container = document.querySelector('.lyrics-content');
     if (!container) return;
-    
     const activeLine = document.querySelector('.lyrics-line-sync.active-line');
     if (activeLine) {
-        activeLine.scrollIntoView({
-            behavior: 'smooth',
-            block: 'center'
-        });
+        activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 }
 
-// ========== CHARGEMENT FAVORIS ==========
-async function loadFavorites() {
-    const favs = await DB.favorites.toArray();
-    favoritesSet.clear();
-    favs.forEach(f => favoritesSet.add(f.id));
-    console.log('⭐ Favoris chargés:', favoritesSet.size);
+// ========== CHARGEMENT DES CHANSONS DEPUIS SUPABASE ==========
+async function loadSongs() {
+    const { data: songs, error } = await supabase
+        .from('songs')
+        .select('*')
+        .order('created_at', { ascending: false });
+    
+    if (error) {
+        console.error('Erreur Supabase:', error);
+        return [];
+    }
+    return songs;
 }
 
 // ========== AFFICHAGE ACCUEIL ==========
@@ -161,15 +160,8 @@ async function showHome() {
     document.getElementById('resultsSection').style.display = 'none';
     document.getElementById('favoritesSection').style.display = 'none';
     
-    try {
-        const response = await fetch('api/suggestions.php');
-        const songs = await response.json();
-        console.log('Suggestions:', songs);
-        displaySongs(songs, 'suggestionsList');
-    } catch (error) {
-        console.error('Erreur chargement suggestions:', error);
-        document.getElementById('suggestionsList').innerHTML = '<p>❌ Erreur de chargement</p>';
-    }
+    const songs = await loadSongs();
+    displaySongs(songs, 'suggestionsList');
 }
 
 // ========== RECHERCHE ==========
@@ -184,15 +176,14 @@ async function searchSongs(query) {
     document.getElementById('resultsSection').style.display = 'block';
     document.getElementById('favoritesSection').style.display = 'none';
     
-    try {
-        const response = await fetch(`api/search.php?q=${encodeURIComponent(query)}`);
-        const songs = await response.json();
-        console.log('Résultats recherche:', songs);
-        displaySongs(songs, 'resultsList');
-    } catch (error) {
-        console.error('Erreur recherche:', error);
-        document.getElementById('resultsList').innerHTML = '<p>❌ Erreur de recherche</p>';
-    }
+    const { data: songs, error } = await supabase
+        .from('songs')
+        .select('*')
+        .ilike('title', `%${query}%`)
+        .or(`artist.ilike.%${query}%`);
+    
+    if (error) return;
+    displaySongs(songs || [], 'resultsList');
 }
 
 // ========== AFFICHAGE FAVORIS ==========
@@ -209,7 +200,7 @@ async function showFavorites() {
 function displayFavorites(favorites) {
     const container = document.getElementById('favoritesList');
     if (favorites.length === 0) {
-        container.innerHTML = '<p style="text-align:center; margin-top:50px;">⭐ Aucun favori pour l\'instant. Ajoute des chansons !</p>';
+        container.innerHTML = '<p style="text-align:center; margin-top:50px;">⭐ Aucun favori</p>';
         return;
     }
     
@@ -230,7 +221,7 @@ function displaySongs(songs, containerId) {
     const container = document.getElementById(containerId);
     
     if (!songs || songs.length === 0) {
-        container.innerHTML = '<p style="text-align:center; margin-top:50px;">😢 Aucun résultat</p>';
+        container.innerHTML = '<p style="text-align:center; margin-top:50px;">😢 Aucune chanson</p>';
         return;
     }
     
@@ -239,9 +230,9 @@ function displaySongs(songs, containerId) {
             <h3>${escapeHtml(song.title)}</h3>
             <p>${escapeHtml(song.artist)}</p>
             <div class="card-buttons">
-                <button class="play-card-btn" onclick="streamSong(${song.id}, '${escapeHtml(song.title)}', '${escapeHtml(song.artist)}', '${escapeHtml(song.filename)}')">▶ Jouer</button>
+                <button class="play-card-btn" onclick="playSong('${song.file_url}', '${escapeHtml(song.title)}', '${escapeHtml(song.artist)}', ${song.id})">▶ Jouer</button>
                 <button class="fav-card-btn ${favoritesSet.has(song.id) ? 'active' : ''}" 
-                        onclick="toggleFavorite(${song.id}, '${escapeHtml(song.title)}', '${escapeHtml(song.artist)}', '${escapeHtml(song.filename)}')">
+                        onclick="toggleFavorite(${song.id}, '${escapeHtml(song.title)}', '${escapeHtml(song.artist)}', '${song.file_url}')">
                     ${favoritesSet.has(song.id) ? '⭐ Favori' : '☆ Ajouter'}
                 </button>
             </div>
@@ -250,39 +241,21 @@ function displaySongs(songs, containerId) {
 }
 
 // ========== LECTURE MUSIQUE ==========
-async function streamSong(id, title, artist, filename) {
-    console.log('🎵 Lecture de:', title, 'ID:', id);
+function playSong(url, title, artist, id) {
+    console.log('🎵 Lecture:', title);
     currentSongId = id;
+    currentSongTitle = title;
+    currentSongArtist = artist;
     
     document.getElementById('currentTitle').textContent = title;
     document.getElementById('currentArtist').textContent = artist;
     
     const audio = document.getElementById('audioPlayer');
-    const songUrl = `api/get_song.php?id=${id}`;
+    audio.src = url;
+    audio.play();
     
-    console.log('URL de lecture:', songUrl);
-    
-    try {
-        const testResponse = await fetch(songUrl, { method: 'HEAD' });
-        if (!testResponse.ok) {
-            console.error('Fichier non trouvé:', testResponse.status);
-            showToast('❌ Fichier non trouvé sur le serveur');
-            return;
-        }
-        
-        audio.src = songUrl;
-        audio.play().catch(e => {
-            console.error('Erreur lecture:', e);
-            showToast('❌ Impossible de lire la musique');
-        });
-        
-        // Afficher les paroles automatiquement
-        await fetchAndShowLyrics(id, title, artist);
-        
-    } catch (error) {
-        console.error('Erreur:', error);
-        showToast('❌ Erreur de connexion');
-    }
+    // Afficher les paroles
+    fetchAndShowLyrics(id, title, artist);
 }
 
 async function playFavorite(id) {
@@ -297,14 +270,13 @@ async function playFavorite(id) {
         audio.src = url;
         audio.play();
         
-        // Afficher les paroles depuis le cache
         await showLyricsFromCache(id, song.title, song.artist);
     } else {
         showToast('❌ Fichier hors ligne non disponible');
     }
 }
 
-// ========== SYSTÈME DE PAROLES SYNCHRONISÉES ==========
+// ========== SYSTÈME DE PAROLES ==========
 function parseLyricsWithTimestamps(lyrics) {
     const lines = lyrics.split('\n');
     const parsedLines = [];
@@ -318,15 +290,13 @@ function parseLyricsWithTimestamps(lyrics) {
         if (trimmedLine === '') {
             parsedLines.push({ text: '', isBreak: true });
         } else if (trimmedLine.startsWith('[') && trimmedLine.endsWith(']')) {
-            // Section title (Couplet, Refrain, etc.)
             parsedLines.push({ 
                 text: trimmedLine, 
                 isSection: true,
-                timestamp: (lineIndex / totalTextLines) * (songDuration || 180)
+                timestamp: (lineIndex / Math.max(totalTextLines, 1)) * (songDuration || 180)
             });
         } else {
-            // Ligne de paroles normale
-            const estimatedTime = (lineIndex / totalTextLines) * (songDuration || 180);
+            const estimatedTime = (lineIndex / Math.max(totalTextLines, 1)) * (songDuration || 180);
             parsedLines.push({ 
                 text: trimmedLine, 
                 timestamp: estimatedTime,
@@ -335,78 +305,52 @@ function parseLyricsWithTimestamps(lyrics) {
             lineIndex++;
         }
     }
-    
-    console.log('📝 Paroles analysées:', parsedLines.length, 'lignes');
     return parsedLines;
 }
 
 async function fetchAndShowLyrics(songId, title, artist) {
-    // Attendre que la durée soit disponible
     const audio = document.getElementById('audioPlayer');
-    const waitForDuration = setInterval(() => {
-        if (audio.duration) {
-            songDuration = audio.duration;
-            clearInterval(waitForDuration);
-        }
-    }, 100);
     
-    // 1. Vérifier si les paroles sont déjà en cache
-    let cached = await getLyricsFromCache(songId);
+    // Vérifier le cache
+    let cached = await DB.lyrics.get(songId);
     let syncedLines = null;
     
     if (cached && cached.synced) {
-        console.log('📝 Paroles trouvées en cache');
         syncedLines = cached.synced;
-        // Recalculer les timestamps avec la durée réelle
         if (songDuration) {
-            recalculateLineTimestamps(syncedLines);
+            const textLines = syncedLines.filter(l => !l.isBreak && !l.isSection && l.text);
+            textLines.forEach((line, idx) => {
+                line.timestamp = (idx / Math.max(textLines.length, 1)) * songDuration;
+            });
         }
         showSyncedLyricsPanel(title, artist, syncedLines);
         return;
     }
     
-    // 2. Sinon, les chercher en ligne
     showSyncedLyricsPanel(title, artist, null, true);
     
     let lyrics = await fetchLyricsOnline(title, artist);
-    
     if (!lyrics) {
         lyrics = generateAIFallbackLyrics(title, artist);
     }
     
-    // Attendre la durée pour les timestamps
     setTimeout(() => {
-        if (audio.duration) {
-            songDuration = audio.duration;
-        } else {
-            songDuration = 180; // Durée par défaut
-        }
-        
-        // Analyser et ajouter des timestamps
+        songDuration = audio.duration || 180;
         syncedLines = parseLyricsWithTimestamps(lyrics);
         
-        // Sauvegarder en cache
-        saveLyricsToCache(songId, lyrics, syncedLines);
+        DB.lyrics.put({
+            id: songId,
+            lyrics: lyrics,
+            synced: syncedLines,
+            timestamp: Date.now()
+        });
         
-        // Si la chanson est en favoris, sauvegarder aussi dans l'objet favori
         if (favoritesSet.has(songId)) {
-            DB.favorites.update(songId, { 
-                lyrics: lyrics,
-                syncedLyrics: syncedLines
-            });
+            DB.favorites.update(songId, { lyrics: lyrics, syncedLyrics: syncedLines });
         }
         
         showSyncedLyricsPanel(title, artist, syncedLines);
     }, 500);
-}
-
-function recalculateLineTimestamps(lines) {
-    const textLines = lines.filter(l => !l.isBreak && !l.isSection && l.text);
-    const totalLines = textLines.length;
-    
-    textLines.forEach((line, idx) => {
-        line.timestamp = (idx / totalLines) * songDuration;
-    });
 }
 
 async function fetchLyricsOnline(title, artist) {
@@ -417,20 +361,14 @@ async function fetchLyricsOnline(title, artist) {
         const response = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(cleanArtist)}/${encodeURIComponent(cleanTitle)}`);
         const data = await response.json();
         
-        if (data.lyrics) {
-            console.log('✅ Paroles trouvées en ligne');
-            return data.lyrics;
-        }
+        if (data.lyrics) return data.lyrics;
         return null;
     } catch (error) {
-        console.log('❌ API lyrics indisponible');
         return null;
     }
 }
 
 function generateAIFallbackLyrics(title, artist) {
-    console.log('🤖 Génération IA des paroles synchronisées');
-    
     return `[Couplet 1]
 Dans la lumière de ${title}
 Je trouve l'inspiration
@@ -462,37 +400,10 @@ ${artist}, ta création
 Nous aide à rêver éveillé`;
 }
 
-async function getLyricsFromCache(songId) {
-    let cached = await DB.lyrics.get(songId);
-    if (cached) {
-        return cached;
-    }
-    
-    const fav = await DB.favorites.get(songId);
-    if (fav && fav.lyrics) {
-        return { lyrics: fav.lyrics, synced: fav.syncedLyrics };
-    }
-    
-    return null;
-}
-
-async function saveLyricsToCache(songId, lyrics, syncedLines) {
-    await DB.lyrics.put({
-        id: songId,
-        lyrics: lyrics,
-        synced: syncedLines,
-        timestamp: Date.now()
-    });
-    console.log('💾 Paroles synchronisées sauvegardées');
-}
-
 async function showLyricsFromCache(songId, title, artist) {
-    const cached = await getLyricsFromCache(songId);
+    const cached = await DB.lyrics.get(songId);
     if (cached && cached.synced) {
         showSyncedLyricsPanel(title, artist, cached.synced);
-    } else if (cached && cached.lyrics) {
-        const synced = parseLyricsWithTimestamps(cached.lyrics);
-        showSyncedLyricsPanel(title, artist, synced);
     } else {
         await fetchAndShowLyrics(songId, title, artist);
     }
@@ -542,7 +453,6 @@ function showSyncedLyricsPanel(title, artist, syncedLines, isLoading = false) {
         return;
     }
     
-    // Stocker les lignes pour la synchronisation
     lyricsLines = syncedLines;
     currentLineIndex = -1;
     
@@ -551,7 +461,7 @@ function showSyncedLyricsPanel(title, artist, syncedLines, isLoading = false) {
         if (line.isSection) {
             return `<div class="lyrics-section">${escapeHtml(line.text)}</div>`;
         }
-        return `<div class="lyrics-line-sync" data-index="${index}" data-time="${line.timestamp || 0}" onclick="jumpToLine(${index})">
+        return `<div class="lyrics-line-sync" data-index="${index}" onclick="jumpToLine(${index})">
                     ${escapeHtml(line.text)}
                 </div>`;
     }).join('');
@@ -582,7 +492,6 @@ function showSyncedLyricsPanel(title, artist, syncedLines, isLoading = false) {
     `;
     panel.style.display = 'block';
     
-    // Redémarrer la synchronisation si la musique joue
     const audio = document.getElementById('audioPlayer');
     if (!audio.paused) {
         startLyricsSync();
@@ -597,8 +506,6 @@ function jumpToLine(index) {
         currentLineIndex = index - 1;
         updateLyricsSync();
         showToast(`⏩ Saut à la ligne ${index + 1}`);
-    } else if (line) {
-        showToast(`⏩ Impossible de sauter à cette ligne`);
     }
 }
 
@@ -609,7 +516,7 @@ function toggleAutoSync() {
         btn.textContent = isAutoScroll ? '🔒 Auto' : '🔓 Manuel';
         btn.classList.toggle('active', isAutoScroll);
     }
-    showToast(isAutoScroll ? '✅ Mode synchro automatique' : '📖 Mode manuel - clique sur les paroles');
+    showToast(isAutoScroll ? '✅ Mode synchro automatique' : '📖 Mode manuel');
     
     if (!isAutoScroll) {
         if (syncInterval) clearInterval(syncInterval);
@@ -643,26 +550,22 @@ function copyLyrics() {
     }
 }
 
-// ========== FAVORIS AVEC PAROLES ==========
-async function toggleFavorite(id, title, artist, filename) {
+// ========== FAVORIS ==========
+async function toggleFavorite(id, title, artist, url) {
     id = parseInt(id);
     
     if (favoritesSet.has(id)) {
         await DB.favorites.delete(id);
         favoritesSet.delete(id);
-        showToast(`❌ ${title} retiré des favoris`);
+        showToast(`❌ ${title} retiré`);
     } else {
         showToast(`📥 Téléchargement de ${title}...`);
         
         try {
-            const response = await fetch(`api/get_song.php?id=${id}&download=1`);
-            if (!response.ok) {
-                throw new Error('Fichier non trouvé');
-            }
+            const response = await fetch(url);
             const blob = await response.blob();
             
-            // Récupérer les paroles synchronisées
-            let cached = await getLyricsFromCache(id);
+            let cached = await DB.lyrics.get(id);
             let lyrics = null;
             let syncedLines = null;
             
@@ -671,38 +574,25 @@ async function toggleFavorite(id, title, artist, filename) {
                 syncedLines = cached.synced;
             } else {
                 lyrics = await fetchLyricsOnline(title, artist);
-                if (!lyrics) {
-                    lyrics = generateAIFallbackLyrics(title, artist);
-                }
-                // Attendre la durée pour les timestamps
-                const audio = document.getElementById('audioPlayer');
-                const duration = audio.duration || 180;
+                if (!lyrics) lyrics = generateAIFallbackLyrics(title, artist);
                 syncedLines = parseLyricsWithTimestamps(lyrics);
-                await saveLyricsToCache(id, lyrics, syncedLines);
+                await DB.lyrics.put({ id, lyrics, synced: syncedLines, timestamp: Date.now() });
             }
             
             await DB.favorites.put({
-                id: id,
-                title: title,
-                artist: artist,
-                filename: filename,
-                blob: blob,
-                lyrics: lyrics,
-                syncedLyrics: syncedLines
+                id, title, artist, filename: `${id}.mp3`, blob, lyrics, syncedLyrics: syncedLines
             });
             
             favoritesSet.add(id);
-            showToast(`✅ ${title} disponible hors ligne avec paroles synchronisées !`);
+            showToast(`✅ ${title} disponible hors ligne !`);
             await updateStorageInfo();
         } catch (error) {
-            console.error('Erreur téléchargement:', error);
-            showToast(`❌ Impossible de télécharger ${title}`);
+            showToast(`❌ Erreur`);
         }
     }
     
     if (currentView === 'home') showHome();
     else if (currentView === 'favorites') showFavorites();
-    else searchSongs(document.getElementById('searchInput').value);
 }
 
 async function removeFavorite(id) {
@@ -710,6 +600,12 @@ async function removeFavorite(id) {
     favoritesSet.delete(parseInt(id));
     showFavorites();
     updateStorageInfo();
+}
+
+async function loadFavorites() {
+    const favs = await DB.favorites.toArray();
+    favoritesSet.clear();
+    favs.forEach(f => favoritesSet.add(f.id));
 }
 
 // ========== UTILITAIRES ==========
@@ -725,18 +621,9 @@ function showToast(message) {
     const toast = document.createElement('div');
     toast.textContent = message;
     toast.style.cssText = `
-        position: fixed; 
-        bottom: 100px; 
-        left: 50%; 
-        transform: translateX(-50%);
-        background: #1DB954; 
-        color: white; 
-        padding: 12px 24px;
-        border-radius: 30px; 
-        z-index: 9999; 
-        animation: fadeOut 2s forwards;
-        font-size: 14px;
-        white-space: nowrap;
+        position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+        background: #1DB954; color: white; padding: 12px 24px;
+        border-radius: 30px; z-index: 9999; animation: fadeOut 2s forwards;
     `;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 2000);
@@ -744,12 +631,7 @@ function showToast(message) {
 
 function escapeHtml(str) {
     if (!str) return '';
-    return str.replace(/[&<>]/g, function(m) {
-        if (m === '&') return '&amp;';
-        if (m === '<') return '&lt;';
-        if (m === '>') return '&gt;';
-        return m;
-    });
+    return str.replace(/[&<>]/g, m => m === '&' ? '&amp;' : m === '<' ? '&lt;' : '&gt;');
 }
 
 function registerServiceWorker() {
@@ -758,72 +640,29 @@ function registerServiceWorker() {
     }
 }
 
-// ========== STYLES DYNAMIQUES ==========
+// Styles
 const style = document.createElement('style');
 style.textContent = `
-    @keyframes fadeOut {
-        0% { opacity: 1; }
-        70% { opacity: 1; }
-        100% { opacity: 0; visibility: hidden; }
-    }
-    
-    .lyrics-section {
-        color: #9b59b6;
-        font-weight: bold;
-        margin: 20px 0 10px 0;
-        font-size: 16px;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    
-    .lyrics-card-btn {
-        background: #9b59b6;
-        color: white;
-        border: none;
-        padding: 8px 12px;
-        border-radius: 20px;
-        cursor: pointer;
-        font-size: 12px;
-        transition: all 0.2s;
-    }
-    
-    .lyrics-card-btn:hover {
-        background: #8e44ad;
-        transform: scale(1.05);
-    }
-    
-    .loading-spinner {
-        border: 3px solid #333;
-        border-top: 3px solid #9b59b6;
-        border-radius: 50%;
-        width: 40px;
-        height: 40px;
-        animation: spin 1s linear infinite;
-        margin: 20px auto;
-    }
-    
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-    
-    .offline-badge-panel {
-        background: #4CAF50;
-        color: white;
-        padding: 4px 10px;
-        border-radius: 20px;
-        font-size: 11px;
-    }
+    @keyframes fadeOut { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+    .lyrics-section { color: #9b59b6; font-weight: bold; margin: 20px 0 10px; font-size: 14px; text-transform: uppercase; }
+    .lyrics-card-btn { background: #9b59b6; color: white; border: none; padding: 8px 12px; border-radius: 20px; cursor: pointer; font-size: 12px; }
+    .lyrics-card-btn:hover { background: #8e44ad; transform: scale(1.05); }
+    .loading-spinner { border: 3px solid #333; border-top: 3px solid #9b59b6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .offline-badge-panel { background: #4CAF50; color: white; padding: 4px 10px; border-radius: 20px; font-size: 11px; }
+    .lyrics-line-sync { transition: all 0.2s; padding: 8px 12px; margin: 4px 0; border-radius: 8px; cursor: pointer; }
+    .lyrics-line-sync:hover { background: rgba(155, 89, 182, 0.1); transform: translateX(5px); }
+    .lyrics-line-sync.active-line { background: linear-gradient(90deg, rgba(155, 89, 182, 0.3), transparent); border-left: 3px solid #9b59b6; font-weight: bold; color: white; }
 `;
 document.head.appendChild(style);
 
-// ========== FONCTIONS GLOBALES ==========
+// Fonctions globales
 window.showHome = showHome;
 window.searchSongs = searchSongs;
 window.showFavorites = showFavorites;
-window.streamSong = streamSong;
-window.toggleFavorite = toggleFavorite;
+window.playSong = playSong;
 window.playFavorite = playFavorite;
+window.toggleFavorite = toggleFavorite;
 window.removeFavorite = removeFavorite;
 window.showLyricsFromCache = showLyricsFromCache;
 window.closeLyrics = closeLyrics;
