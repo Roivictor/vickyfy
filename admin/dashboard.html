@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vickyfy - Admin</title>
+    <meta charset="UTF-8">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            background: #121212; 
+            color: white; 
+            padding: 20px; 
+        }
+        .upload-form { 
+            background: #282828; 
+            padding: 20px; 
+            border-radius: 10px; 
+            max-width: 500px; 
+            margin: 0 auto;
+        }
+        input, button, select { 
+            padding: 10px; 
+            margin: 10px 0; 
+            width: 100%; 
+            border-radius: 5px;
+            border: none;
+        }
+        button { 
+            background: #1DB954; 
+            color: white; 
+            border: none; 
+            cursor: pointer; 
+            font-weight: bold;
+        }
+        button:hover {
+            background: #0e8e3e;
+        }
+        .message {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .success {
+            background: #1DB954;
+        }
+        .error {
+            background: #f44336;
+        }
+        h1, h2 {
+            text-align: center;
+        }
+        #songsList {
+            margin-top: 30px;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .song-item {
+            background: #282828;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .delete-btn {
+            background: #f44336;
+            width: auto;
+            padding: 5px 15px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎵 Admin Vickyfy</h1>
+    <div class="upload-form">
+        <h2>Upload nouvelle chanson</h2>
+        <div id="message"></div>
+        <input type="text" id="title" placeholder="Titre de la chanson" required>
+        <input type="text" id="artist" placeholder="Nom de l'artiste" required>
+        <input type="file" id="songFile" accept="audio/*" required>
+        <button onclick="uploadSong()">📤 Upload la chanson</button>
+    </div>
+    <div id="songsList">
+        <h2>Chansons existantes</h2>
+        <div id="songs"></div>
+    </div>
+
+    <script>
+        const API_URL = '../api'; // Changé de /api à ../api
+        
+        async function uploadSong() {
+            const title = document.getElementById('title').value;
+            const artist = document.getElementById('artist').value;
+            const fileInput = document.getElementById('songFile');
+            const file = fileInput.files[0];
+            
+            // Validation
+            if (!title || !artist || !file) {
+                showMessage('Veuillez remplir tous les champs', 'error');
+                return;
+            }
+            
+            // Vérifier le type de fichier
+            if (!file.type.includes('audio')) {
+                showMessage('Veuillez sélectionner un fichier audio (MP3, WAV, etc.)', 'error');
+                return;
+            }
+            
+            showMessage('Upload en cours...', 'success');
+            
+            const formData = new FormData();
+            formData.append('title', title);
+            formData.append('artist', artist);
+            formData.append('song', file);
+            
+            try {
+                const response = await fetch(`${API_URL}/upload.php`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                console.log('Response:', result);
+                
+                if (result.success) {
+                    showMessage('✅ Upload réussi ! La chanson a été ajoutée', 'success');
+                    // Vider le formulaire
+                    document.getElementById('title').value = '';
+                    document.getElementById('artist').value = '';
+                    fileInput.value = '';
+                    // Recharger la liste
+                    loadSongs();
+                } else {
+                    showMessage('❌ Erreur: ' + (result.error || 'Upload failed'), 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage('❌ Erreur de connexion: ' + error.message, 'error');
+            }
+        }
+        
+        async function loadSongs() {
+            try {
+                const response = await fetch(`${API_URL}/get_songs_list.php`);
+                const songs = await response.json();
+                
+                const songsDiv = document.getElementById('songs');
+                if (songs.length === 0) {
+                    songsDiv.innerHTML = '<p style="text-align:center;">Aucune chanson pour le moment</p>';
+                    return;
+                }
+                
+                songsDiv.innerHTML = songs.map(song => `
+                    <div class="song-item">
+                        <div>
+                            <strong>${song.title}</strong> - ${song.artist}
+                        </div>
+                        <button class="delete-btn" onclick="deleteSong(${song.id})">🗑 Supprimer</button>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading songs:', error);
+            }
+        }
+        
+        async function deleteSong(id) {
+            if (confirm('Supprimer cette chanson ?')) {
+                const response = await fetch(`${API_URL}/delete_song.php?id=${id}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+                if (result.success) {
+                    loadSongs();
+                }
+            }
+        }
+        
+        function showMessage(msg, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.innerHTML = `<div class="message ${type}">${msg}</div>`;
+            setTimeout(() => {
+                messageDiv.innerHTML = '';
+            }, 3000);
+        }
+        
+        // Charger les chansons au démarrage
+        loadSongs();
+    </script>
+</body>
+</html>
