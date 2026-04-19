@@ -44,7 +44,7 @@ async function showAdminPanel() {
                     <div class="upload-progress-bar">
                         <div class="upload-progress-fill" id="uploadProgressFill" style="width: 0%"></div>
                     </div>
-                    <small>Veuillez patienter, ne fermez pas cette page</small>
+                    <small id="progressStatus">Préparation de l'upload...</small>
                 </div>
                 <button class="admin-submit" id="adminUploadBtn" onclick="uploadSongToSupabase()">
                     <i class="fas fa-cloud-upload-alt"></i> Uploader la chanson
@@ -312,19 +312,21 @@ async function loadAdminSongsList() {
     `).join('');
 }
 
-function showProgressBar(percent) {
+function showProgressBar(percent, status) {
     const container = document.getElementById('progressContainer');
     if (container) {
         container.style.display = 'block';
-        updateProgressBar(percent);
+        updateProgressBar(percent, status);
     }
 }
 
-function updateProgressBar(percent) {
+function updateProgressBar(percent, status) {
     const fill = document.getElementById('uploadProgressFill');
     const percentSpan = document.getElementById('progressPercent');
+    const statusSpan = document.getElementById('progressStatus');
     if (fill) fill.style.width = percent + '%';
     if (percentSpan) percentSpan.textContent = Math.round(percent) + '%';
+    if (statusSpan && status) statusSpan.textContent = status;
 }
 
 function hideProgressBar() {
@@ -370,20 +372,33 @@ async function uploadSongToSupabase() {
     uploadBtn.disabled = true;
     
     // Afficher la barre de progression
-    showProgressBar(0);
+    showProgressBar(10, "Préparation du fichier...");
     
     const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const cleanArtist = artist.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const fileName = `${cleanTitle}_${cleanArtist}_${Date.now()}.mp3`;
     
     try {
-        // Upload vers Storage avec simulation de progression
-        // Note: Supabase ne supporte pas nativement onUploadProgress, on simule
-        let progress = 0;
+        updateProgressBar(20, "Connexion au serveur...");
+        
+        // Petite pause pour l'affichage
+        await new Promise(r => setTimeout(r, 500));
+        
+        updateProgressBar(30, "Upload du fichier MP3...");
+        
+        // Upload vers Storage
+        const startTime = Date.now();
+        const fileSize = file.size;
+        let lastProgress = 30;
+        
+        // Simuler une progression réaliste basée sur la taille
         const progressInterval = setInterval(() => {
-            if (progress < 90) {
-                progress += Math.random() * 10;
-                updateProgressBar(Math.min(progress, 90));
+            const elapsed = Date.now() - startTime;
+            // Estimation basée sur le temps écoulé et la taille
+            const estimatedProgress = Math.min(85, 30 + (elapsed / (fileSize / 50000)) * 55);
+            if (estimatedProgress > lastProgress && estimatedProgress < 85) {
+                lastProgress = estimatedProgress;
+                updateProgressBar(lastProgress, `Upload en cours... ${Math.round(lastProgress)}%`);
             }
         }, 500);
         
@@ -396,7 +411,7 @@ async function uploadSongToSupabase() {
         
         if (uploadError) throw uploadError;
         
-        updateProgressBar(95);
+        updateProgressBar(90, "Traitement du fichier...");
         
         // Récupérer l'URL publique
         const { data: { publicUrl } } = supabase
@@ -404,7 +419,7 @@ async function uploadSongToSupabase() {
             .from('songs')
             .getPublicUrl(fileName);
         
-        updateProgressBar(98);
+        updateProgressBar(95, "Enregistrement en base de données...");
         
         // Ajouter dans la base
         const { error: insertError } = await supabase
@@ -419,7 +434,7 @@ async function uploadSongToSupabase() {
         
         if (insertError) throw insertError;
         
-        updateProgressBar(100);
+        updateProgressBar(100, "Terminé !");
         
         showToast(`✅ "${title}" ajoutée avec succès !`);
         
