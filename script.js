@@ -634,7 +634,7 @@ async function showAdminPanel() {
                 <div class="form-group">
                     <label>Fichier MP3</label>
                     <input type="file" id="adminFile" accept="audio/mpeg,audio/mp3" required>
-                    <small>Upload ultra-rapide via GoFile.io</small>
+                    <small>Upload direct vers Supabase (stockage permanent)</small>
                 </div>
                 <div id="progressContainer" style="display:none;" class="upload-progress-container">
                     <div class="upload-progress-header">
@@ -646,7 +646,7 @@ async function showAdminPanel() {
                     </div>
                     <small id="progressStatus">Préparation...</small>
                 </div>
-                <button class="admin-submit" id="adminUploadBtn" onclick="uploadSongToGoFile()">
+                <button class="admin-submit" id="adminUploadBtn" onclick="uploadSongToSupabase()">
                     <i class="fas fa-cloud-upload-alt"></i> Uploader la chanson
                 </button>
             </div>
@@ -738,7 +738,8 @@ function hideProgressBar() {
     if (container) container.style.display = 'none';
 }
 
-async function uploadSongToGoFile() {
+// ========== UPLOAD DIRECT VERS SUPABASE STORAGE ==========
+async function uploadSongToSupabase() {
     if (isUploading) {
         showToast('⏳ Upload en cours...');
         return;
@@ -760,70 +761,82 @@ async function uploadSongToGoFile() {
     
     isUploading = true;
     const uploadBtn = document.getElementById('adminUploadBtn');
-    const originalBtnText = uploadBtn.innerHTML;
-    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload...';
+    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload vers Supabase...';
     uploadBtn.disabled = true;
     
-    showProgressBar(0, "Connexion à GoFile.io...");
+    showProgressBar(0, "Préparation...");
+    
+    // Créer un nom de fichier propre
+    const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const cleanArtist = artist.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const fileName = `${cleanTitle}_${cleanArtist}_${Date.now()}.mp3`;
     
     try {
-        const formData = new FormData();
-        formData.append('file', file);
+        showProgressBar(20, "Upload vers Supabase Storage...");
         
-        showProgressBar(20, "Upload du fichier...");
+        // 1. Upload vers Supabase Storage
+        const { data: uploadData, error: uploadError } = await supabaseClient
+            .storage
+            .from('songs')
+            .upload(fileName, file, {
+                cacheControl: '3600',
+                upsert: false
+            });
         
-        const uploadResponse = await fetch('https://store1.gofile.io/uploadFile', {
-            method: 'POST',
-            body: formData
-        });
-        
-        const result = await uploadResponse.json();
-        
-        if (result.status !== 'ok') {
-            throw new Error('Upload échoué');
+        if (uploadError) {
+            console.error('Upload error:', uploadError);
+            throw new Error(`Upload échoué: ${uploadError.message}`);
         }
         
-        showProgressBar(80, "Traitement du lien...");
+        showProgressBar(70, "Récupération du lien public...");
         
-        const fileId = result.data.fileId;
-        const directLink = `https://store1.gofile.io/download/direct/${fileId}`;
+        // 2. Récupérer l'URL publique
+        const { data: { publicUrl } } = supabaseClient
+            .storage
+            .from('songs')
+            .getPublicUrl(fileName);
         
-        showProgressBar(90, "Enregistrement...");
+        console.log('URL publique:', publicUrl);
         
-        const fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.mp3`;
+        showProgressBar(85, "Enregistrement en base de données...");
         
+        // 3. Insérer dans la table songs
         const { error: insertError } = await supabaseClient
             .from('songs')
             .insert({
                 title: title,
                 artist: artist,
                 filename: fileName,
-                file_url: directLink,
+                file_url: publicUrl,
                 plays: 0
             });
         
-        if (insertError) throw insertError;
+        if (insertError) {
+            console.error('Insert error:', insertError);
+            throw new Error(`Erreur base de données: ${insertError.message}`);
+        }
         
         showProgressBar(100, "Terminé !");
-        
         showToast(`✅ "${title}" ajoutée avec succès !`);
         
+        // Réinitialiser le formulaire
         document.getElementById('adminTitle').value = '';
         document.getElementById('adminArtist').value = '';
         document.getElementById('adminFile').value = '';
         
+        // Recharger les listes
         await loadAdminSongsList();
-        showHome();
+        await showHome();
         
         setTimeout(() => hideProgressBar(), 2000);
         
     } catch (error) {
-        console.error('Erreur:', error);
+        console.error('Erreur complète:', error);
         showToast(`❌ Erreur: ${error.message}`);
         hideProgressBar();
     } finally {
         isUploading = false;
-        uploadBtn.innerHTML = originalBtnText;
+        uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Uploader la chanson';
         uploadBtn.disabled = false;
     }
 }
@@ -832,6 +845,17 @@ async function deleteSongFromAdmin(songId) {
     if (!confirm('⚠️ Supprimer cette chanson ?')) return;
     
     showToast('🗑 Suppression...');
+    
+    // Récupérer le nom du fichier pour le supprimer du storage
+    const { data: song, error: fetchError } = await supabaseClient
+        .from('songs')
+        .select('filename')
+        .eq('id', songId)
+        .single();
+    
+    if (song && song.filename) {
+        await supabaseClient.storage.from('songs').remove([song.filename]);
+    }
     
     const { error: deleteError } = await supabaseClient
         .from('songs')
@@ -848,5 +872,5 @@ async function deleteSongFromAdmin(songId) {
 }
 
 window.showAdminPanel = showAdminPanel;
-window.uploadSongToGoFile = uploadSongToGoFile;
+window.uploadSongToSupabase = uploadSongToSupabase;
 window.deleteSongFromAdmin = deleteSongFromAdmin;
