@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="style.css">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1DB954">
-    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="description" content="Vickyfy - Écoutez et téléchargez vos musiques préférées, même hors ligne">
 </head>
@@ -224,23 +224,25 @@
         
         function clearAllFavorites() {
             if (confirm('⚠️ Supprimer tous les favoris ? Cette action est irréversible.')) {
-                // Supprimer tous les favoris de IndexedDB
-                DB.favorites.clear().then(() => {
-                    favoritesSet.clear();
-                    showToast('🗑 Tous les favoris ont été supprimés');
-                    showFavorites();
-                    updateStorageInfo();
-                }).catch(() => {
-                    showToast('❌ Erreur lors de la suppression');
-                });
+                if (typeof DB !== 'undefined' && DB.favorites) {
+                    DB.favorites.clear().then(() => {
+                        if (typeof favoritesSet !== 'undefined') favoritesSet.clear();
+                        showToast('🗑 Tous les favoris ont été supprimés');
+                        showFavorites();
+                        updateStorageInfo();
+                    }).catch(() => {
+                        showToast('❌ Erreur lors de la suppression');
+                    });
+                } else {
+                    showToast('❌ Base de données non disponible');
+                }
             }
         }
         
         function addCurrentToFavorites() {
             const title = document.getElementById('currentTitle').textContent;
             const artist = document.getElementById('currentArtist').textContent;
-            if (title !== 'Aucune chanson' && currentSongId) {
-                // Ajouter aux favoris
+            if (title !== 'Aucune chanson' && typeof currentSongId !== 'undefined' && currentSongId) {
                 toggleFavorite(currentSongId, title, artist, document.getElementById('audioPlayer').src);
             } else {
                 showToast('🎵 Aucune chanson en cours');
