@@ -1,4 +1,4 @@
-// ========== ADMIN PANEL ==========
+// ========== ADMIN PANEL AVEC GOFILE.IO (ULTRA RAPIDE) ==========
 let isUploading = false;
 let progressContainer = null;
 
@@ -34,7 +34,7 @@ async function showAdminPanel() {
                 <div class="form-group">
                     <label>Fichier MP3</label>
                     <input type="file" id="adminFile" accept="audio/mpeg,audio/mp3" required>
-                    <small>Sélectionnez un fichier MP3 (sera compressé automatiquement)</small>
+                    <small>Upload ultra-rapide via GoFile.io</small>
                 </div>
                 <div id="progressContainer" style="display:none;" class="upload-progress-container">
                     <div class="upload-progress-header">
@@ -335,117 +335,7 @@ function hideProgressBar() {
     }
 }
 
-// Compression audio simple (rééchantillonnage via AudioContext)
-async function compressAudioFile(file) {
-    return new Promise((resolve, reject) => {
-        const fileSizeMB = file.size / (1024 * 1024);
-        
-        // Si le fichier est déjà petit (< 3MB), on le garde
-        if (fileSizeMB < 3) {
-            resolve(file);
-            return;
-        }
-        
-        updateProgressBar(5, "Compression du fichier audio...");
-        
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const reader = new FileReader();
-        
-        reader.onload = async function(e) {
-            try {
-                const audioBuffer = await audioContext.decodeAudioData(e.target.result);
-                const originalDuration = audioBuffer.duration;
-                
-                // Calculer le nouveau taux d'échantillonnage (réduction pour compression)
-                const targetSampleRate = 22050; // 22.05 kHz (qualité FM, suffisante pour musique)
-                const offlineContext = new OfflineAudioContext(
-                    audioBuffer.numberOfChannels,
-                    audioBuffer.length * (targetSampleRate / audioBuffer.sampleRate),
-                    targetSampleRate
-                );
-                
-                const source = offlineContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(offlineContext.destination);
-                source.start();
-                
-                updateProgressBar(10, "Compression en cours...");
-                
-                const renderedBuffer = await offlineContext.startRendering();
-                
-                // Convertir en WAV puis en MP3 via conversion simple
-                const wavBlob = audioBufferToWav(renderedBuffer);
-                
-                updateProgressBar(15, "Optimisation terminée");
-                
-                // Créer un nouveau fichier avec le même nom mais compressé
-                const compressedFile = new File([wavBlob], file.name.replace('.mp3', '_compressed.mp3'), {
-                    type: 'audio/mpeg'
-                });
-                
-                const newSizeMB = compressedFile.size / (1024 * 1024);
-                console.log(`Compression: ${fileSizeMB.toFixed(1)}Mo → ${newSizeMB.toFixed(1)}Mo (${Math.round((1 - newSizeMB/fileSizeMB)*100)}% réduit)`);
-                
-                if (newSizeMB < fileSizeMB) {
-                    resolve(compressedFile);
-                } else {
-                    resolve(file);
-                }
-            } catch (err) {
-                console.warn("Compression échouée, utilisation du fichier original", err);
-                resolve(file);
-            }
-        };
-        
-        reader.onerror = () => resolve(file);
-        reader.readAsArrayBuffer(file);
-    });
-}
-
-function audioBufferToWav(buffer) {
-    const numChannels = buffer.numberOfChannels;
-    const sampleRate = buffer.sampleRate;
-    const format = 1; // PCM
-    const bitDepth = 16;
-    
-    let samples = buffer.getChannelData(0);
-    let dataLength = samples.length * (bitDepth / 8);
-    let bufferLength = 44 + dataLength;
-    const arrayBuffer = new ArrayBuffer(bufferLength);
-    const view = new DataView(arrayBuffer);
-    
-    // RIFF chunk
-    writeString(view, 0, 'RIFF');
-    view.setUint32(4, bufferLength - 8, true);
-    writeString(view, 8, 'WAVE');
-    writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, format, true);
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
-    view.setUint16(32, numChannels * (bitDepth / 8), true);
-    view.setUint16(34, bitDepth, true);
-    writeString(view, 36, 'data');
-    view.setUint32(40, dataLength, true);
-    
-    // Write samples
-    let offset = 44;
-    for (let i = 0; i < samples.length; i++) {
-        const sample = Math.max(-1, Math.min(1, samples[i]));
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-        offset += 2;
-    }
-    
-    return new Blob([arrayBuffer], { type: 'audio/wav' });
-}
-
-function writeString(view, offset, str) {
-    for (let i = 0; i < str.length; i++) {
-        view.setUint8(offset + i, str.charCodeAt(i));
-    }
-}
-
+// ========== UPLOAD AVEC GOFILE.IO (ULTRA RAPIDE) ==========
 async function uploadSongToSupabase() {
     if (isUploading) {
         showToast('⏳ Upload en cours, veuillez patienter...');
@@ -454,7 +344,7 @@ async function uploadSongToSupabase() {
     
     const title = document.getElementById('adminTitle').value.trim();
     const artist = document.getElementById('adminArtist').value.trim();
-    let file = document.getElementById('adminFile').files[0];
+    const file = document.getElementById('adminFile').files[0];
     
     if (!title || !artist || !file) {
         showToast('❌ Veuillez remplir tous les champs');
@@ -469,52 +359,47 @@ async function uploadSongToSupabase() {
     isUploading = true;
     const uploadBtn = document.getElementById('adminUploadBtn');
     const originalBtnText = uploadBtn.innerHTML;
-    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Compression...';
+    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload vers GoFile...';
     uploadBtn.disabled = true;
     
-    showProgressBar(0, "Analyse du fichier...");
+    showProgressBar(0, "Connexion à GoFile.io...");
     
     try {
-        // Compresser le fichier avant upload
-        const originalSize = file.size / (1024 * 1024);
-        file = await compressAudioFile(file);
-        const newSize = file.size / (1024 * 1024);
+        const formData = new FormData();
+        formData.append('file', file);
         
-        if (originalSize > newSize) {
-            showToast(`📦 Fichier compressé: ${originalSize.toFixed(1)}Mo → ${newSize.toFixed(1)}Mo`);
+        updateProgressBar(20, "Upload du fichier...");
+        
+        // Upload vers GoFile.io (très rapide)
+        const uploadResponse = await fetch('https://store1.gofile.io/uploadFile', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await uploadResponse.json();
+        
+        if (result.status !== 'ok') {
+            throw new Error('Upload GoFile échoué');
         }
         
-        uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload...';
-        updateProgressBar(20, "Upload vers le cloud...");
+        updateProgressBar(80, "Traitement du lien...");
         
-        const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const cleanArtist = artist.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const fileName = `${cleanTitle}_${cleanArtist}_${Date.now()}.mp3`;
+        // Récupérer le lien direct
+        const fileId = result.data.fileId;
+        const directLink = `https://store1.gofile.io/download/direct/${fileId}`;
         
-        // Upload du fichier compressé (plus petit donc plus rapide)
-        const { error: uploadError } = await supabase
-            .storage
-            .from('songs')
-            .upload(fileName, file);
+        updateProgressBar(90, "Enregistrement en base...");
         
-        if (uploadError) throw uploadError;
+        const fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.mp3`;
         
-        updateProgressBar(80, "Finalisation...");
-        
-        const { data: { publicUrl } } = supabase
-            .storage
-            .from('songs')
-            .getPublicUrl(fileName);
-        
-        updateProgressBar(90, "Enregistrement...");
-        
+        // Sauvegarder dans Supabase
         const { error: insertError } = await supabase
             .from('songs')
             .insert({
                 title: title,
                 artist: artist,
                 filename: fileName,
-                file_url: publicUrl,
+                file_url: directLink,
                 plays: 0
             });
         
@@ -522,15 +407,20 @@ async function uploadSongToSupabase() {
         
         updateProgressBar(100, "Terminé !");
         
-        showToast(`✅ "${title}" ajoutée avec succès !`);
+        showToast(`✅ "${title}" ajoutée avec succès ! (${(file.size / (1024 * 1024)).toFixed(1)} Mo)`);
         
+        // Réinitialiser le formulaire
         document.getElementById('adminTitle').value = '';
         document.getElementById('adminArtist').value = '';
         document.getElementById('adminFile').value = '';
         
+        // Recharger la liste
         await loadAdminSongsList();
+        
+        // Rafraîchir l'accueil
         showHome();
         
+        // Cacher la barre après un délai
         setTimeout(() => hideProgressBar(), 2000);
         
     } catch (error) {
@@ -549,6 +439,7 @@ async function deleteSongFromAdmin(songId) {
     
     showToast('🗑 Suppression en cours...');
     
+    // Récupérer le nom du fichier
     const { data: song, error: fetchError } = await supabase
         .from('songs')
         .select('filename')
@@ -560,10 +451,7 @@ async function deleteSongFromAdmin(songId) {
         return;
     }
     
-    if (song && song.filename) {
-        await supabase.storage.from('songs').remove([song.filename]);
-    }
-    
+    // Supprimer de la base (GoFile supprime automatiquement après inactivité)
     const { error: deleteError } = await supabase
         .from('songs')
         .delete()
@@ -578,6 +466,7 @@ async function deleteSongFromAdmin(songId) {
     }
 }
 
+// Fonctions globales supplémentaires
 window.showAdminPanel = showAdminPanel;
 window.uploadSongToSupabase = uploadSongToSupabase;
 window.deleteSongFromAdmin = deleteSongFromAdmin;
