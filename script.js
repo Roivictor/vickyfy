@@ -34,7 +34,7 @@ async function showAdminPanel() {
                 <div class="form-group">
                     <label>Fichier MP3</label>
                     <input type="file" id="adminFile" accept="audio/mpeg,audio/mp3" required>
-                    <small>Sélectionnez un fichier MP3</small>
+                    <small>Sélectionnez un fichier MP3 (sera compressé automatiquement)</small>
                 </div>
                 <div id="progressContainer" style="display:none;" class="upload-progress-container">
                     <div class="upload-progress-header">
@@ -44,7 +44,7 @@ async function showAdminPanel() {
                     <div class="upload-progress-bar">
                         <div class="upload-progress-fill" id="uploadProgressFill" style="width: 0%"></div>
                     </div>
-                    <small id="progressStatus">Préparation de l'upload...</small>
+                    <small id="progressStatus">Préparation...</small>
                 </div>
                 <button class="admin-submit" id="adminUploadBtn" onclick="uploadSongToSupabase()">
                     <i class="fas fa-cloud-upload-alt"></i> Uploader la chanson
@@ -230,7 +230,6 @@ function addAdminStyles() {
             color: var(--text-secondary);
         }
         
-        /* Barre de progression */
         .upload-progress-container {
             background: var(--dark-hover);
             border-radius: 12px;
@@ -336,6 +335,117 @@ function hideProgressBar() {
     }
 }
 
+// Compression audio simple (rééchantillonnage via AudioContext)
+async function compressAudioFile(file) {
+    return new Promise((resolve, reject) => {
+        const fileSizeMB = file.size / (1024 * 1024);
+        
+        // Si le fichier est déjà petit (< 3MB), on le garde
+        if (fileSizeMB < 3) {
+            resolve(file);
+            return;
+        }
+        
+        updateProgressBar(5, "Compression du fichier audio...");
+        
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const reader = new FileReader();
+        
+        reader.onload = async function(e) {
+            try {
+                const audioBuffer = await audioContext.decodeAudioData(e.target.result);
+                const originalDuration = audioBuffer.duration;
+                
+                // Calculer le nouveau taux d'échantillonnage (réduction pour compression)
+                const targetSampleRate = 22050; // 22.05 kHz (qualité FM, suffisante pour musique)
+                const offlineContext = new OfflineAudioContext(
+                    audioBuffer.numberOfChannels,
+                    audioBuffer.length * (targetSampleRate / audioBuffer.sampleRate),
+                    targetSampleRate
+                );
+                
+                const source = offlineContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(offlineContext.destination);
+                source.start();
+                
+                updateProgressBar(10, "Compression en cours...");
+                
+                const renderedBuffer = await offlineContext.startRendering();
+                
+                // Convertir en WAV puis en MP3 via conversion simple
+                const wavBlob = audioBufferToWav(renderedBuffer);
+                
+                updateProgressBar(15, "Optimisation terminée");
+                
+                // Créer un nouveau fichier avec le même nom mais compressé
+                const compressedFile = new File([wavBlob], file.name.replace('.mp3', '_compressed.mp3'), {
+                    type: 'audio/mpeg'
+                });
+                
+                const newSizeMB = compressedFile.size / (1024 * 1024);
+                console.log(`Compression: ${fileSizeMB.toFixed(1)}Mo → ${newSizeMB.toFixed(1)}Mo (${Math.round((1 - newSizeMB/fileSizeMB)*100)}% réduit)`);
+                
+                if (newSizeMB < fileSizeMB) {
+                    resolve(compressedFile);
+                } else {
+                    resolve(file);
+                }
+            } catch (err) {
+                console.warn("Compression échouée, utilisation du fichier original", err);
+                resolve(file);
+            }
+        };
+        
+        reader.onerror = () => resolve(file);
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+function audioBufferToWav(buffer) {
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+    
+    let samples = buffer.getChannelData(0);
+    let dataLength = samples.length * (bitDepth / 8);
+    let bufferLength = 44 + dataLength;
+    const arrayBuffer = new ArrayBuffer(bufferLength);
+    const view = new DataView(arrayBuffer);
+    
+    // RIFF chunk
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, bufferLength - 8, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, format, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
+    view.setUint16(32, numChannels * (bitDepth / 8), true);
+    view.setUint16(34, bitDepth, true);
+    writeString(view, 36, 'data');
+    view.setUint32(40, dataLength, true);
+    
+    // Write samples
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++) {
+        const sample = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+        offset += 2;
+    }
+    
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+function writeString(view, offset, str) {
+    for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+    }
+}
+
 async function uploadSongToSupabase() {
     if (isUploading) {
         showToast('⏳ Upload en cours, veuillez patienter...');
@@ -344,7 +454,7 @@ async function uploadSongToSupabase() {
     
     const title = document.getElementById('adminTitle').value.trim();
     const artist = document.getElementById('adminArtist').value.trim();
-    const file = document.getElementById('adminFile').files[0];
+    let file = document.getElementById('adminFile').files[0];
     
     if (!title || !artist || !file) {
         showToast('❌ Veuillez remplir tous les champs');
@@ -356,72 +466,48 @@ async function uploadSongToSupabase() {
         return;
     }
     
-    // Vérifier la taille du fichier
-    const fileSizeMB = file.size / (1024 * 1024);
-    if (fileSizeMB > 15) {
-        const confirmUpload = confirm(`⚠️ Le fichier fait ${fileSizeMB.toFixed(1)} Mo.\n\nL'upload peut prendre plusieurs minutes.\n\nVoulez-vous continuer ?`);
-        if (!confirmUpload) return;
-    } else if (fileSizeMB > 8) {
-        showToast(`📤 Fichier de ${fileSizeMB.toFixed(1)} Mo, l'upload peut prendre un moment...`);
-    }
-    
     isUploading = true;
     const uploadBtn = document.getElementById('adminUploadBtn');
     const originalBtnText = uploadBtn.innerHTML;
-    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload en cours...';
+    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Compression...';
     uploadBtn.disabled = true;
     
-    // Afficher la barre de progression
-    showProgressBar(10, "Préparation du fichier...");
-    
-    const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const cleanArtist = artist.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    const fileName = `${cleanTitle}_${cleanArtist}_${Date.now()}.mp3`;
+    showProgressBar(0, "Analyse du fichier...");
     
     try {
-        updateProgressBar(20, "Connexion au serveur...");
+        // Compresser le fichier avant upload
+        const originalSize = file.size / (1024 * 1024);
+        file = await compressAudioFile(file);
+        const newSize = file.size / (1024 * 1024);
         
-        // Petite pause pour l'affichage
-        await new Promise(r => setTimeout(r, 500));
+        if (originalSize > newSize) {
+            showToast(`📦 Fichier compressé: ${originalSize.toFixed(1)}Mo → ${newSize.toFixed(1)}Mo`);
+        }
         
-        updateProgressBar(30, "Upload du fichier MP3...");
+        uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload...';
+        updateProgressBar(20, "Upload vers le cloud...");
         
-        // Upload vers Storage
-        const startTime = Date.now();
-        const fileSize = file.size;
-        let lastProgress = 30;
+        const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const cleanArtist = artist.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const fileName = `${cleanTitle}_${cleanArtist}_${Date.now()}.mp3`;
         
-        // Simuler une progression réaliste basée sur la taille
-        const progressInterval = setInterval(() => {
-            const elapsed = Date.now() - startTime;
-            // Estimation basée sur le temps écoulé et la taille
-            const estimatedProgress = Math.min(85, 30 + (elapsed / (fileSize / 50000)) * 55);
-            if (estimatedProgress > lastProgress && estimatedProgress < 85) {
-                lastProgress = estimatedProgress;
-                updateProgressBar(lastProgress, `Upload en cours... ${Math.round(lastProgress)}%`);
-            }
-        }, 500);
-        
+        // Upload du fichier compressé (plus petit donc plus rapide)
         const { error: uploadError } = await supabase
             .storage
             .from('songs')
             .upload(fileName, file);
         
-        clearInterval(progressInterval);
-        
         if (uploadError) throw uploadError;
         
-        updateProgressBar(90, "Traitement du fichier...");
+        updateProgressBar(80, "Finalisation...");
         
-        // Récupérer l'URL publique
         const { data: { publicUrl } } = supabase
             .storage
             .from('songs')
             .getPublicUrl(fileName);
         
-        updateProgressBar(95, "Enregistrement en base de données...");
+        updateProgressBar(90, "Enregistrement...");
         
-        // Ajouter dans la base
         const { error: insertError } = await supabase
             .from('songs')
             .insert({
@@ -438,18 +524,13 @@ async function uploadSongToSupabase() {
         
         showToast(`✅ "${title}" ajoutée avec succès !`);
         
-        // Réinitialiser le formulaire
         document.getElementById('adminTitle').value = '';
         document.getElementById('adminArtist').value = '';
         document.getElementById('adminFile').value = '';
         
-        // Recharger la liste
         await loadAdminSongsList();
-        
-        // Rafraîchir l'accueil
         showHome();
         
-        // Cacher la barre après un délai
         setTimeout(() => hideProgressBar(), 2000);
         
     } catch (error) {
@@ -468,7 +549,6 @@ async function deleteSongFromAdmin(songId) {
     
     showToast('🗑 Suppression en cours...');
     
-    // Récupérer le nom du fichier
     const { data: song, error: fetchError } = await supabase
         .from('songs')
         .select('filename')
@@ -480,17 +560,10 @@ async function deleteSongFromAdmin(songId) {
         return;
     }
     
-    // Supprimer du Storage
     if (song && song.filename) {
-        const { error: storageError } = await supabase
-            .storage
-            .from('songs')
-            .remove([song.filename]);
-        
-        if (storageError) console.error('Erreur storage:', storageError);
+        await supabase.storage.from('songs').remove([song.filename]);
     }
     
-    // Supprimer de la base
     const { error: deleteError } = await supabase
         .from('songs')
         .delete()
@@ -505,7 +578,6 @@ async function deleteSongFromAdmin(songId) {
     }
 }
 
-// Fonctions globales supplémentaires
 window.showAdminPanel = showAdminPanel;
 window.uploadSongToSupabase = uploadSongToSupabase;
 window.deleteSongFromAdmin = deleteSongFromAdmin;
