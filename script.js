@@ -1,4 +1,7 @@
 // ========== ADMIN PANEL ==========
+let isUploading = false;
+let progressContainer = null;
+
 async function showAdminPanel() {
     currentView = 'admin';
     document.getElementById('homeSection').style.display = 'none';
@@ -33,6 +36,16 @@ async function showAdminPanel() {
                     <input type="file" id="adminFile" accept="audio/mpeg,audio/mp3" required>
                     <small>Sélectionnez un fichier MP3</small>
                 </div>
+                <div id="progressContainer" style="display:none;" class="upload-progress-container">
+                    <div class="upload-progress-header">
+                        <span>📤 Upload en cours...</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="upload-progress-bar">
+                        <div class="upload-progress-fill" id="uploadProgressFill" style="width: 0%"></div>
+                    </div>
+                    <small>Veuillez patienter, ne fermez pas cette page</small>
+                </div>
                 <button class="admin-submit" id="adminUploadBtn" onclick="uploadSongToSupabase()">
                     <i class="fas fa-cloud-upload-alt"></i> Uploader la chanson
                 </button>
@@ -41,7 +54,7 @@ async function showAdminPanel() {
             <div class="admin-card">
                 <h3><i class="fas fa-list"></i> Chansons existantes</h3>
                 <div id="adminSongsList" class="admin-songs-list">
-                    <div class="loading-spinner"></div>
+                    <div class="loading-spinner">Chargement...</div>
                 </div>
             </div>
         </div>
@@ -217,11 +230,43 @@ function addAdminStyles() {
             color: var(--text-secondary);
         }
         
-        .loading-spinner::before {
-            content: "⏳";
-            display: inline-block;
-            animation: spin 1s linear infinite;
-            margin-right: 10px;
+        /* Barre de progression */
+        .upload-progress-container {
+            background: var(--dark-hover);
+            border-radius: 12px;
+            padding: 15px;
+            margin: 15px 0;
+            border: 1px solid var(--glass-border);
+        }
+        
+        .upload-progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        
+        .upload-progress-bar {
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .upload-progress-fill {
+            height: 100%;
+            background: var(--gradient-1);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        
+        .upload-progress-container small {
+            display: block;
+            margin-top: 10px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            text-align: center;
         }
         
         @keyframes spin {
@@ -241,7 +286,7 @@ async function loadAdminSongsList() {
     const container = document.getElementById('adminSongsList');
     if (!container) return;
     
-    container.innerHTML = '<div class="loading-spinner">Chargement...</div>';
+    container.innerHTML = '<div class="loading-spinner">⏳ Chargement...</div>';
     
     const { data: songs, error } = await supabase
         .from('songs')
@@ -267,7 +312,27 @@ async function loadAdminSongsList() {
     `).join('');
 }
 
-let isUploading = false;
+function showProgressBar(percent) {
+    const container = document.getElementById('progressContainer');
+    if (container) {
+        container.style.display = 'block';
+        updateProgressBar(percent);
+    }
+}
+
+function updateProgressBar(percent) {
+    const fill = document.getElementById('uploadProgressFill');
+    const percentSpan = document.getElementById('progressPercent');
+    if (fill) fill.style.width = percent + '%';
+    if (percentSpan) percentSpan.textContent = Math.round(percent) + '%';
+}
+
+function hideProgressBar() {
+    const container = document.getElementById('progressContainer');
+    if (container) {
+        container.style.display = 'none';
+    }
+}
 
 async function uploadSongToSupabase() {
     if (isUploading) {
@@ -289,35 +354,59 @@ async function uploadSongToSupabase() {
         return;
     }
     
+    // Vérifier la taille du fichier
+    const fileSizeMB = file.size / (1024 * 1024);
+    if (fileSizeMB > 15) {
+        const confirmUpload = confirm(`⚠️ Le fichier fait ${fileSizeMB.toFixed(1)} Mo.\n\nL'upload peut prendre plusieurs minutes.\n\nVoulez-vous continuer ?`);
+        if (!confirmUpload) return;
+    } else if (fileSizeMB > 8) {
+        showToast(`📤 Fichier de ${fileSizeMB.toFixed(1)} Mo, l'upload peut prendre un moment...`);
+    }
+    
     isUploading = true;
     const uploadBtn = document.getElementById('adminUploadBtn');
     const originalBtnText = uploadBtn.innerHTML;
     uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload en cours...';
     uploadBtn.disabled = true;
     
-    showToast('📤 Upload en cours...');
+    // Afficher la barre de progression
+    showProgressBar(0);
     
-    // Créer un nom de fichier propre
     const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const cleanArtist = artist.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const fileName = `${cleanTitle}_${cleanArtist}_${Date.now()}.mp3`;
     
     try {
-        // 1. Upload vers Storage
+        // Upload vers Storage avec simulation de progression
+        // Note: Supabase ne supporte pas nativement onUploadProgress, on simule
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+            if (progress < 90) {
+                progress += Math.random() * 10;
+                updateProgressBar(Math.min(progress, 90));
+            }
+        }, 500);
+        
         const { error: uploadError } = await supabase
             .storage
             .from('songs')
             .upload(fileName, file);
         
+        clearInterval(progressInterval);
+        
         if (uploadError) throw uploadError;
         
-        // 2. Récupérer l'URL publique
+        updateProgressBar(95);
+        
+        // Récupérer l'URL publique
         const { data: { publicUrl } } = supabase
             .storage
             .from('songs')
             .getPublicUrl(fileName);
         
-        // 3. Ajouter dans la base
+        updateProgressBar(98);
+        
+        // Ajouter dans la base
         const { error: insertError } = await supabase
             .from('songs')
             .insert({
@@ -329,6 +418,8 @@ async function uploadSongToSupabase() {
             });
         
         if (insertError) throw insertError;
+        
+        updateProgressBar(100);
         
         showToast(`✅ "${title}" ajoutée avec succès !`);
         
@@ -343,9 +434,13 @@ async function uploadSongToSupabase() {
         // Rafraîchir l'accueil
         showHome();
         
+        // Cacher la barre après un délai
+        setTimeout(() => hideProgressBar(), 2000);
+        
     } catch (error) {
         console.error('Erreur:', error);
         showToast(`❌ Erreur: ${error.message}`);
+        hideProgressBar();
     } finally {
         isUploading = false;
         uploadBtn.innerHTML = originalBtnText;
