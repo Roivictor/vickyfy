@@ -33,7 +33,7 @@ async function showAdminPanel() {
                     <input type="file" id="adminFile" accept="audio/mpeg,audio/mp3" required>
                     <small>Sélectionnez un fichier MP3</small>
                 </div>
-                <button class="admin-submit" onclick="uploadSongToSupabase()">
+                <button class="admin-submit" id="adminUploadBtn" onclick="uploadSongToSupabase()">
                     <i class="fas fa-cloud-upload-alt"></i> Uploader la chanson
                 </button>
             </div>
@@ -57,7 +57,7 @@ async function showAdminPanel() {
     addAdminStyles();
     
     // Charger la liste
-    loadAdminSongsList();
+    await loadAdminSongsList();
 }
 
 function addAdminStyles() {
@@ -71,7 +71,7 @@ function addAdminStyles() {
         }
         
         .close-admin {
-            background: var(--glass);
+            background: rgba(255, 255, 255, 0.1);
             border: none;
             padding: 10px 20px;
             border-radius: 25px;
@@ -80,6 +80,7 @@ function addAdminStyles() {
             display: flex;
             align-items: center;
             gap: 8px;
+            transition: all 0.2s;
         }
         
         .close-admin:hover {
@@ -123,6 +124,7 @@ function addAdminStyles() {
             border-radius: 12px;
             color: var(--text-primary);
             font-size: 14px;
+            box-sizing: border-box;
         }
         
         .form-group input:focus {
@@ -155,10 +157,18 @@ function addAdminStyles() {
             box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
         
+        .admin-submit:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
         .admin-songs-list {
             display: flex;
             flex-direction: column;
             gap: 10px;
+            max-height: 400px;
+            overflow-y: auto;
         }
         
         .admin-song-item {
@@ -168,10 +178,17 @@ function addAdminStyles() {
             padding: 15px;
             background: var(--dark-hover);
             border-radius: 12px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .admin-song-info {
+            flex: 1;
         }
         
         .admin-song-info h4 {
             margin-bottom: 5px;
+            font-size: 16px;
         }
         
         .admin-song-info p {
@@ -194,6 +211,24 @@ function addAdminStyles() {
             color: white;
         }
         
+        .loading-spinner {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-secondary);
+        }
+        
+        .loading-spinner::before {
+            content: "⏳";
+            display: inline-block;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -203,14 +238,18 @@ function addAdminStyles() {
 }
 
 async function loadAdminSongsList() {
+    const container = document.getElementById('adminSongsList');
+    if (!container) return;
+    
+    container.innerHTML = '<div class="loading-spinner">Chargement...</div>';
+    
     const { data: songs, error } = await supabase
         .from('songs')
         .select('*')
         .order('created_at', { ascending: false });
     
-    const container = document.getElementById('adminSongsList');
     if (error || !songs || songs.length === 0) {
-        container.innerHTML = '<p style="text-align:center; color:var(--text-secondary);">Aucune chanson</p>';
+        container.innerHTML = '<p style="text-align:center; color:var(--text-secondary);">📭 Aucune chanson</p>';
         return;
     }
     
@@ -219,6 +258,7 @@ async function loadAdminSongsList() {
             <div class="admin-song-info">
                 <h4>${escapeHtml(song.title)}</h4>
                 <p>${escapeHtml(song.artist)}</p>
+                <small style="color:#666; font-size:10px;">${song.filename}</small>
             </div>
             <button class="delete-song-btn" onclick="deleteSongFromAdmin(${song.id})">
                 <i class="fas fa-trash"></i> Supprimer
@@ -227,7 +267,14 @@ async function loadAdminSongsList() {
     `).join('');
 }
 
+let isUploading = false;
+
 async function uploadSongToSupabase() {
+    if (isUploading) {
+        showToast('⏳ Upload en cours, veuillez patienter...');
+        return;
+    }
+    
     const title = document.getElementById('adminTitle').value.trim();
     const artist = document.getElementById('adminArtist').value.trim();
     const file = document.getElementById('adminFile').files[0];
@@ -241,6 +288,12 @@ async function uploadSongToSupabase() {
         showToast('❌ Veuillez sélectionner un fichier MP3');
         return;
     }
+    
+    isUploading = true;
+    const uploadBtn = document.getElementById('adminUploadBtn');
+    const originalBtnText = uploadBtn.innerHTML;
+    uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Upload en cours...';
+    uploadBtn.disabled = true;
     
     showToast('📤 Upload en cours...');
     
@@ -285,7 +338,7 @@ async function uploadSongToSupabase() {
         document.getElementById('adminFile').value = '';
         
         // Recharger la liste
-        loadAdminSongsList();
+        await loadAdminSongsList();
         
         // Rafraîchir l'accueil
         showHome();
@@ -293,11 +346,17 @@ async function uploadSongToSupabase() {
     } catch (error) {
         console.error('Erreur:', error);
         showToast(`❌ Erreur: ${error.message}`);
+    } finally {
+        isUploading = false;
+        uploadBtn.innerHTML = originalBtnText;
+        uploadBtn.disabled = false;
     }
 }
 
 async function deleteSongFromAdmin(songId) {
-    if (!confirm('Supprimer cette chanson ? Cette action est irréversible.')) return;
+    if (!confirm('⚠️ Supprimer cette chanson ? Cette action est irréversible.')) return;
+    
+    showToast('🗑 Suppression en cours...');
     
     // Récupérer le nom du fichier
     const { data: song, error: fetchError } = await supabase
@@ -307,13 +366,18 @@ async function deleteSongFromAdmin(songId) {
         .single();
     
     if (fetchError) {
-        showToast('❌ Erreur');
+        showToast('❌ Erreur: Chanson non trouvée');
         return;
     }
     
     // Supprimer du Storage
     if (song && song.filename) {
-        await supabase.storage.from('songs').remove([song.filename]);
+        const { error: storageError } = await supabase
+            .storage
+            .from('songs')
+            .remove([song.filename]);
+        
+        if (storageError) console.error('Erreur storage:', storageError);
     }
     
     // Supprimer de la base
@@ -323,13 +387,14 @@ async function deleteSongFromAdmin(songId) {
         .eq('id', songId);
     
     if (deleteError) {
-        showToast('❌ Erreur');
+        showToast('❌ Erreur lors de la suppression');
     } else {
-        showToast('✅ Chanson supprimée');
-        loadAdminSongsList();
+        showToast('✅ Chanson supprimée avec succès');
+        await loadAdminSongsList();
         showHome();
     }
 }
+
 // Fonctions globales supplémentaires
 window.showAdminPanel = showAdminPanel;
 window.uploadSongToSupabase = uploadSongToSupabase;

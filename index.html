@@ -43,6 +43,11 @@
                     <span>Favoris</span>
                     <div class="nav-indicator"></div>
                 </button>
+                <button class="nav-btn" onclick="showAdminPanel()">
+                    <i class="fas fa-cog"></i>
+                    <span>Admin</span>
+                    <div class="nav-indicator"></div>
+                </button>
             </nav>
             
             <div class="storage-info">
@@ -219,15 +224,24 @@
         
         function clearAllFavorites() {
             if (confirm('⚠️ Supprimer tous les favoris ? Cette action est irréversible.')) {
-                showToast('🗑 Suppression de tous les favoris...');
+                // Supprimer tous les favoris de IndexedDB
+                DB.favorites.clear().then(() => {
+                    favoritesSet.clear();
+                    showToast('🗑 Tous les favoris ont été supprimés');
+                    showFavorites();
+                    updateStorageInfo();
+                }).catch(() => {
+                    showToast('❌ Erreur lors de la suppression');
+                });
             }
         }
         
         function addCurrentToFavorites() {
             const title = document.getElementById('currentTitle').textContent;
             const artist = document.getElementById('currentArtist').textContent;
-            if (title !== 'Aucune chanson') {
-                showToast(`⭐ ${title} ajouté aux favoris`);
+            if (title !== 'Aucune chanson' && currentSongId) {
+                // Ajouter aux favoris
+                toggleFavorite(currentSongId, title, artist, document.getElementById('audioPlayer').src);
             } else {
                 showToast('🎵 Aucune chanson en cours');
             }
@@ -236,7 +250,7 @@
         function togglePlayPause() {
             const audio = document.getElementById('audioPlayer');
             const btn = document.getElementById('playPauseBtn');
-            if (!audio.src) {
+            if (!audio.src || audio.src === '') {
                 showToast('🎵 Sélectionnez une chanson d\'abord');
                 return;
             }
@@ -300,11 +314,11 @@
         }
         
         // Animation du scroll
-        const main = document.querySelector('.main');
-        if (main) {
-            main.addEventListener('scroll', () => {
+        const mainElement = document.querySelector('.main');
+        if (mainElement) {
+            mainElement.addEventListener('scroll', () => {
                 const searchSection = document.querySelector('.search-section');
-                if (main.scrollTop > 50) {
+                if (mainElement.scrollTop > 50) {
                     searchSection.classList.add('scrolled');
                 } else {
                     searchSection.classList.remove('scrolled');
@@ -333,8 +347,8 @@
         if (volumeBar && audioPlayer) {
             volumeBar.addEventListener('click', (e) => {
                 const rect = volumeBar.getBoundingClientRect();
-                const percent = (e.clientX - rect.left) / rect.width;
-                audioPlayer.volume = Math.min(1, Math.max(0, percent));
+                const percent = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+                audioPlayer.volume = percent;
                 if (volumeFill) volumeFill.style.width = (percent * 100) + '%';
                 
                 if (audioPlayer.volume === 0) {
@@ -353,7 +367,7 @@
             progressBar.addEventListener('click', (e) => {
                 const rect = progressBar.getBoundingClientRect();
                 const percent = (e.clientX - rect.left) / rect.width;
-                if (audioPlayer.duration) {
+                if (audioPlayer.duration && !isNaN(audioPlayer.duration)) {
                     audioPlayer.currentTime = percent * audioPlayer.duration;
                 }
             });
