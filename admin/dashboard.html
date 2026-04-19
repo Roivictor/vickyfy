@@ -46,6 +46,9 @@
         .error {
             background: #f44336;
         }
+        .info {
+            background: #2196F3;
+        }
         h1, h2 {
             text-align: center;
         }
@@ -69,6 +72,10 @@
             width: auto;
             padding: 5px 15px;
         }
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
     </style>
 </head>
 <body>
@@ -78,7 +85,7 @@
         <div id="message"></div>
         <input type="text" id="title" placeholder="Titre de la chanson" required>
         <input type="text" id="artist" placeholder="Nom de l'artiste" required>
-        <input type="file" id="songFile" accept="audio/*" required>
+        <input type="file" id="songFile" accept="audio/mpeg,audio/mp3" required>
         <button onclick="uploadSong()">📤 Upload la chanson</button>
     </div>
     <div id="songsList">
@@ -86,67 +93,90 @@
         <div id="songs"></div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
-        const API_URL = '../api'; // Changé de /api à ../api
+        // Configuration Supabase (à mettre à jour avec TES identifiants)
+        const SUPABASE_URL = 'https://ocenlsrwqhroiwngxstb.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_jS_lqFt7korNB75ymk6Qww__3bkImZq';
+        
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         
         async function uploadSong() {
-            const title = document.getElementById('title').value;
-            const artist = document.getElementById('artist').value;
-            const fileInput = document.getElementById('songFile');
-            const file = fileInput.files[0];
+            const title = document.getElementById('title').value.trim();
+            const artist = document.getElementById('artist').value.trim();
+            const file = document.getElementById('songFile').files[0];
             
-            // Validation
             if (!title || !artist || !file) {
                 showMessage('Veuillez remplir tous les champs', 'error');
                 return;
             }
             
-            // Vérifier le type de fichier
-            if (!file.type.includes('audio')) {
-                showMessage('Veuillez sélectionner un fichier audio (MP3, WAV, etc.)', 'error');
+            if (!file.type.includes('mp3') && !file.type.includes('mpeg')) {
+                showMessage('Veuillez sélectionner un fichier MP3', 'error');
                 return;
             }
             
-            showMessage('Upload en cours...', 'success');
+            showMessage('📤 Upload en cours...', 'info');
             
-            const formData = new FormData();
-            formData.append('title', title);
-            formData.append('artist', artist);
-            formData.append('song', file);
+            // Créer un nom de fichier propre
+            const cleanTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const cleanArtist = artist.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const fileName = `${cleanTitle}_${cleanArtist}_${Date.now()}.mp3`;
             
             try {
-                const response = await fetch(`${API_URL}/upload.php`, {
-                    method: 'POST',
-                    body: formData
-                });
+                // 1. Upload vers Supabase Storage
+                const { error: uploadError } = await supabase
+                    .storage
+                    .from('songs')
+                    .upload(fileName, file);
                 
-                const result = await response.json();
-                console.log('Response:', result);
+                if (uploadError) throw uploadError;
                 
-                if (result.success) {
-                    showMessage('✅ Upload réussi ! La chanson a été ajoutée', 'success');
-                    // Vider le formulaire
-                    document.getElementById('title').value = '';
-                    document.getElementById('artist').value = '';
-                    fileInput.value = '';
-                    // Recharger la liste
-                    loadSongs();
-                } else {
-                    showMessage('❌ Erreur: ' + (result.error || 'Upload failed'), 'error');
-                }
+                // 2. Récupérer l'URL publique
+                const { data: { publicUrl } } = supabase
+                    .storage
+                    .from('songs')
+                    .getPublicUrl(fileName);
+                
+                // 3. Ajouter dans la base de données
+                const { error: insertError } = await supabase
+                    .from('songs')
+                    .insert({
+                        title: title,
+                        artist: artist,
+                        filename: fileName,
+                        file_url: publicUrl,
+                        plays: 0
+                    });
+                
+                if (insertError) throw insertError;
+                
+                showMessage(`✅ "${title}" ajoutée avec succès !`, 'success');
+                
+                // Réinitialiser le formulaire
+                document.getElementById('title').value = '';
+                document.getElementById('artist').value = '';
+                document.getElementById('songFile').value = '';
+                
+                // Recharger la liste
+                loadSongs();
+                
             } catch (error) {
-                console.error('Error:', error);
-                showMessage('❌ Erreur de connexion: ' + error.message, 'error');
+                console.error('Erreur:', error);
+                showMessage(`❌ Erreur: ${error.message}`, 'error');
             }
         }
         
         async function loadSongs() {
             try {
-                const response = await fetch(`${API_URL}/get_songs_list.php`);
-                const songs = await response.json();
+                const { data: songs, error } = await supabase
+                    .from('songs')
+                    .select('*')
+                    .order('created_at', { ascending: false });
                 
                 const songsDiv = document.getElementById('songs');
-                if (songs.length === 0) {
+                
+                if (error || !songs || songs.length === 0) {
                     songsDiv.innerHTML = '<p style="text-align:center;">Aucune chanson pour le moment</p>';
                     return;
                 }
@@ -154,25 +184,41 @@
                 songsDiv.innerHTML = songs.map(song => `
                     <div class="song-item">
                         <div>
-                            <strong>${song.title}</strong> - ${song.artist}
+                            <strong>${escapeHtml(song.title)}</strong> - ${escapeHtml(song.artist)}
+                            <br>
+                            <small style="color:#888;">${song.filename}</small>
                         </div>
-                        <button class="delete-btn" onclick="deleteSong(${song.id})">🗑 Supprimer</button>
+                        <button class="delete-btn" onclick="deleteSong(${song.id}, '${escapeHtml(song.filename)}')">🗑 Supprimer</button>
                     </div>
                 `).join('');
             } catch (error) {
                 console.error('Error loading songs:', error);
+                document.getElementById('songs').innerHTML = '<p style="text-align:center;">Erreur de chargement</p>';
             }
         }
         
-        async function deleteSong(id) {
-            if (confirm('Supprimer cette chanson ?')) {
-                const response = await fetch(`${API_URL}/delete_song.php?id=${id}`, {
-                    method: 'DELETE'
-                });
-                const result = await response.json();
-                if (result.success) {
-                    loadSongs();
+        async function deleteSong(id, filename) {
+            if (!confirm('Supprimer cette chanson ? Cette action est irréversible.')) return;
+            
+            try {
+                // Supprimer le fichier du Storage
+                if (filename) {
+                    await supabase.storage.from('songs').remove([filename]);
                 }
+                
+                // Supprimer de la base de données
+                const { error: deleteError } = await supabase
+                    .from('songs')
+                    .delete()
+                    .eq('id', id);
+                
+                if (deleteError) throw deleteError;
+                
+                showMessage('✅ Chanson supprimée', 'success');
+                loadSongs();
+            } catch (error) {
+                console.error('Erreur:', error);
+                showMessage('❌ Erreur lors de la suppression', 'error');
             }
         }
         
@@ -182,6 +228,11 @@
             setTimeout(() => {
                 messageDiv.innerHTML = '';
             }, 3000);
+        }
+        
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>]/g, m => m === '&' ? '&amp;' : m === '<' ? '&lt;' : '&gt;');
         }
         
         // Charger les chansons au démarrage
